@@ -1,0 +1,389 @@
+
+(defclass basic-productor ()
+ ((sources :type simple-vector :accessor srces :initarg :srces :initform nil)
+  (state :type fixnum :accessor state :initarg :state :initform 0 
+   :documentation 
+   "If the next method has not yet been called on this productor, 0, else, 1"
+  )
+))
+(defmethod renew ((self basic-productor) &rest parms)
+ (setv0 (srces self) parms) (setf (state self) 0) nil
+)
+(defmethod reset ((self basic-productor))
+ (cond ((plusp (state self)) (setf (state self) 0) t)
+       (T nil)
+))
+
+(defclass productor ()
+ ((branch :type list :accessor branch :initarg :branch :initform nil)
+  (clsrs :type simple-vector :accessor clsrs)
+  (sources :type simple-vector :accessor srces :initarg :srces :initform nil)
+  (state :type fixnum :accessor state :initarg :state :initform 0 
+   :documentation 
+   "The value is either 
+    0 (if the next method has not yet been called on this productor), 
+    1 (if the next method has already been called), or
+    2 (if the productor has been reset)"
+  )
+))
+(defmethod next ((self productor))
+ (let ((br (branch self)) (st (state self)))
+  (cond ((null br) 
+         (if (= 1 st) ; (= 1 st) means that the next method of this productor has already been 
+                      ; called, (null br) then means that we must have tried to backtrack to
+                      ; the next higher source conjunction, but obviously, there is none, so
+                      ; no further backtracking is possible and we have to say:
+          :no
+                      ; else        
+          (prog1 (apply (getv0 (clsrs self)) (getv0 (srces self))))          
+        ))
+        (T (setf (state self) (if (= st 2) 0 1)) 
+         (let ((tmp (funcall (svref (lgsvref br (clsrs self)) 0))))
+          (setf (state self) 1)              
+          (cond ((eq tmp :no) ; backtrack to the next higher source conjunction:
+                 (pop (branch self)) (next self))
+                (T tmp)
+)))     )))
+(defmethod reset ((self productor))
+ (let ((s (state self)))
+  (cond ((zerop s) nil)
+        (T (setf (state self) 2  (branch self) (last (branch self))) t) 
+)))     
+(defmethod renew ((self productor) &rest parms)
+ (setv0 (srces self) parms) (setf (state self) 0 (branch self) nil)
+)
+ 
+
+(defun split3 (x) 
+; die Anfaenge der Elemente bis zur ersten Liste in val0, die Reste der Elemente in val1.
+ (cond ((null x) nil)
+       (T (mlet ((car1 car2) (token (car x) #'atom 0) (cdr1 cdr2) (split3 (cdr x)))
+         (values `(,car1 ,@cdr1) `(,car2 ,@cdr2))
+))     ))
+
+(defun backtrack (srcds varls varns vlc vnc prod br src body)  
+ "Generates the backtracking code for a source conjunction within a productor."
+ ; Parameters (examples based on the definition of the catal productor, see further below): 
+ ; srcds = list of source descriptions, e.g. (('DIVID (COPY-LIST L)) ('CATAL D1) ('CATAL D2))
+ ; varls = list of variable lists, e.g. ((D1 D2) (C1) (C2))
+ ; varns = list of variable names used in these lists, e.g. (D1 D2 C1 C2)
+ ; vlc   = variable list count (starting with 0), e.g. 2
+ ; vnc   = variable name count (starting with 0), e.g. 3
+ ; prod  = the name of the variable that contains the current productor, e.g. PROD*
+ ; br    = a list denoting the location ('branch') of the current source conjunction in the 
+ ;    productor structure, e.g. (1)
+ ; src   = the description of the whole source conjunction, e.g.
+ ;   ((D1 D2 'DIVID (COPY-LIST L)) (C1 'CATAL D1) (C2 'CATAL D2))
+ 
+ (with-gensyms nil (i imax srce prm msrces srces state srcd tmp vl r allnew)
+  (if (cdr src)
+   (let ((depv (coerce (cons 0 
+        (do ((i vlc (1- i)) (srcd nil) (dep nil) (depl nil (cons dep depl))) 
+         ((zerop i) depl)
+         (setf dep 0 srcd (nth i srcds))
+         (do ((j 0 (1+ j)) (2^j 1 (* 2 2^j))) ((>= j i))
+          (dolist (k (nth j varls))
+           (if (find% k srcd) (setf dep (logior dep 2^j)))
+       )))) 'array 
+    ))) 
+    `(block source (let*  
+       ((,msrces (svec (lgsvref ',br (srces ,prod)))) (,srces (svec (getv0 ,msrces)))  
+        (,state (the fixnum (state ,prod))) (,vl 0) ,i (,imax 0) ,allnew ,srce ,tmp
+       ) 
+       (if (zerop (array-dimension ,srces 0))
+        (setf ,srces (setv0 ,msrces (make-array ,(1+ vlc) :initial-element nil)))
+       )      
+       (block btrack		;;; Backtracking-Schleife
+        (tagbody                             
+         (when (= 1 ,state) (setf ,i ,vlc) (go NEXT)) 
+         (setf ,allnew t  ,i ,0)
+         UP  ; (print (list :up ,i ,srces :vlc ,vlc))
+         (setf ,imax (max ,i ,imax)  ,srce (svref ,srces ,i))
+         (if (or (and ,allnew (= ,i ,imax)) (plusp (logand ,vl (svref ',depv ,i))))
+          (if (and ,srce (slot-exists-p ,srce 'branch))
+           (let ((,prm (svref (srces ,srce) 0)))
+            (case ,i ,@(flg i (1+ vlc) `(,i (setf ,@(nflg j (1- (length (nth i srcds)))
+                 `((nth ,j ,prm) ,(nth j (cdr (nth i srcds))))
+            )))))    
+            (setf (state ,srce) 0)
+            (if (slot-exists-p ,srce 'branch) (setf (branch ,srce) nil))
+           )
+           (case ,i ,@(flg i (1+ vlc) 
+             (list i `(setf (svref ,srces ,i) (prod ,@(nth i srcds))))
+          ))) 
+          (case ,i ,@(flg i (1+ vlc) 
+            (list i `(reset (svref ,srces ,i)))
+         ))) 
+         NEXT 
+         (if (minusp ,i) (return-from btrack)) 
+         (when (eq 
+           (case ,i ,@(flg k (1+ vlc) 
+             (let ((tmp0 (nth k varls)) (tmp1 `(next (svref ,srces ,k))))
+              (if (cdr tmp0)
+               `(,k (multiple-value-setq ,tmp0 ,tmp1))
+               `(,k (setf ,(car tmp0) ,tmp1))
+           )))) :no
+          ) (decf ,i) (go next) 
+         ) 
+         (if (= ,vlc ,i) (return-from btrack))
+         (setf ,vl (logior (expt 2 ,i) ,vl))
+         (incf ,i) (go up)
+       ))
+       (if (eq ,(caar (last varls)) :no) (return-from source :no))
+       ,@body
+    ))) 
+  
+   ; else:
+   `(block source (let*                     
+      ((,msrces (svec (lgsvref ',br (srces ,prod)))) (,srces (svec (getv0 ,msrces)))   
+       (,state (the fixnum (state ,prod))) 
+      )
+      (if (zerop (array-dimension ,srces 0))
+       (setf ,srces (setv0 ,msrces (make-array 1 :initial-element nil)))
+      )      
+      (setf ,srce (getv0 ,srces))
+      (cond ((null ,srce) (setf ,srce (setv0 ,srces (prod ,@(car srcds)))))
+            ((zerop ,state) 
+             (let ((,prm (svref (srces ,srce) 0)))
+              ,@(flg i (length (cdar srcds)) `(setf (nth ,i ,prm) ,(nth i (cdar srcds))))
+              (setf (state ,srce) 0)
+              (if (slot-exists-p ,srce 'branch) (setf (branch ,srce) nil))
+            ))
+            (T nil)
+      )
+      (if (zerop ,vnc) (setf ,(car varns) (next (getv0 ,srces)))
+       (multiple-value-setq ,varns (next (getv0 ,srces)))
+      )
+      (when (eq ,(car varns) :no) (return-from source :no))
+      ,@body
+))) ))
+
+(defun macronm (cl br)
+ ; returns a macro name of the form cl°"-MACRO-"°br_1°"-"°br_2°"-"°...°br_n, where br_i is the
+ ; ith element of br and ° the string concatenation operator. 
+ ; Example: if cl is DIVID and br is (0 1) the result will be "DIVID-MACRO-0-1".
+ (concatenate 'string (symbol-name cl) "-MACRO" 
+  (do ((x br (cdr x)) (erg "" (concatenate 'string "-" (numstr (car x)) erg)))
+   ((null x) erg)
+)))
+
+(defmacro source (br acc initl mcrns sm rnk clsrs cl ll src &body body &aux tmp macro btrck) 
+ (if (null body) `(prog1 (if (= 1 (state *prod)) :no ,src) (setf (state *prod) 1))
+  (mlet* ((varls srcds) (split3 src) varns (flat varls) vlc (1- (length varls)) 
+    vnc (1- (length varns))  clsrsn (gensym)  clsre (gensym) 
+   )
+   (incf (car rnk)) (push (car rnk) (car br)) (push (car br) (car acc)) 
+   (push (list (car rnk) 1) (cddr (setf tmp (lgnth (cdar br) (car initl) #'1+)))) 
+   (incf (cadr tmp))
+   (setf macro (intern (macronm cl (car br))))
+   (push macro (car mcrns))
+   (setf btrck (backtrack srcds varls varns vlc vnc '*prod (car br) src 
+     (maex-s `(source 
+       ((,(list 0) ,clsrsn ,cl ,ll) nil ,br ,acc ,initl ,mcrns ,sm) 
+      ) body 
+   )))
+   (push `(compile ',macro) (car sm))
+   (push `(defmacro ,macro (prod) 
+     `(let ((,',clsrsn (lgsvref ',',(car br) (clsrs ,prod))) (*prod ,prod)) 
+       ,',btrck
+    ) )    
+    (car sm)
+   ) 
+   (push `(print ',macro) (car sm))
+   `(let (,clsre ,@varns) 
+     (push ',(car rnk) (branch *prod))           
+     (if (null ,clsre) 
+      (setf ,clsre (setv0 (svref ,clsrs ,(car rnk)) (lambda () (,macro *prod))))
+     )
+     (setf (state *prod) 0)
+     (funcall ,clsre)
+))) )
+         
+(defmacro defprod (cl ll data &body body)
+ (let ((acc (list nil)) (initl `(,(list nil 1))) (mcrns (list nil)) (sm (list nil)) 
+   (macro (intern (macronm cl '(0)))) (clsrs (gensym)) sm0 
+  ) 
+  (setf sm0 
+   `(defmacro ,macro (prod)
+     `(let ((,',clsrs (clsrs ,prod)) (*prod ,prod)) 
+        ,@',(maex-s `(source 
+             ((,(list 0) ,clsrs ,cl ,ll) nil ,(list nil) ,acc ,initl ,mcrns ,sm)
+            ) body
+  ) ) )    ) 
+  (with-gensyms nil (obj mcr)
+   `(let (,obj ,mcr)
+     (defclass ,cl (productor) 
+       ,(cons '(macros :allocation :class :accessor macros) data)
+     ) 
+     (setf ,obj (make-instance ',cl)  (macros ,obj) ',(buildv (cdar initl)))
+     (mapflv #'identity ',(cons macro (nreverse (car mcrns))) (macros ,obj))
+     (format t "Macros being (re-)defined:") 
+     (print ',macro) ,sm0 (compile ',macro) ; erstes Makro
+     ,@(car sm)                             ; restliche Makros
+     (defprod-a ,cl ,ll ,(cdar initl)) t
+))) )
+(defmacro defprod-a (cl ll initl) 
+ (let* ((obj (make-instance cl)) (mcr (svref (macros obj) 0)) (prod (gensym))) 
+  `(defmethod clone ((self ,cl) *parameters)
+    (let ((,prod (make-instance ',cl))) 
+     (setf (branch ,prod) nil) 
+     (setf (clsrs ,prod) (buildv ',initl) 
+           (srces ,prod) (buildv ',initl (make-array 0)) 
+     )
+     (setv0 (srces ,prod) *parameters)
+     (setv0 (clsrs ,prod) (lambda ,ll (,mcr ,prod)))
+     ,prod  
+)) ))  
+    
+(defun prod (class &rest args)
+ (clone (make-instance class) args)
+)
+ 
+(defmacro setpr (name class &rest args)
+ `(setf ,name (prod ,class ,@args))
+)
+
+(defun findall (prod) 
+ "returns a list of all the objects produced by a productor 
+  (in the same order that they are produced)"
+ (let ((erg (list (next prod))))
+  (do ((tl erg (cdr tl)) (nx (next prod) (next prod))) 
+   ((eq nx :no) erg)
+   (setf (cdr tl) (list nx))
+)))
+(compile 'findall)
+
+
+; Basis-Produktoren:
+
+(defclass prod (basic-productor) ())
+(defmethod clone ((self prod) pr)
+ (make-instance 'prod :srces (vector pr nil) :state 0)
+)
+(defmethod next ((self prod)) (next (car (getv0 (srces self)))))
+(defmethod reset ((self prod)) (reset (car (getv0 (srces self)))))
+
+
+(defclass is (basic-productor) ())
+(defmethod clone ((self is) x) 
+ (make-instance 'is :srces (vector x nil) :state 0)
+)
+(defmethod next ((self is))
+ (prog1 (if (= 1 (state self)) :no (car (getv0 (srces self)))) 
+  (setf (state self) 1)
+))
+
+
+(defclass if (basic-productor) ())
+(defmethod clone ((self if) x)
+ (make-instance 'if :srces (vector x nil) :state 0)
+)
+(defmethod next ((self if))
+ (prog1 (if (and (zerop (state self)) (car (getv0 (srces self)))) :yes :no) 
+  (setf (state self) 1)
+))
+
+
+(defclass member (basic-productor) ())
+(defmethod clone ((self member) l)
+ (make-instance 'member :srces (vector l nil) :state 0)
+)
+(defmethod next ((self member))
+ (let* ((src (srces self)) (a (svref src 1)))
+  (cond ((zerop (state self)) (setf (svref src 1) (cdar (getv0 src))  (state self) 1) 
+         (caar (getv0 src))
+        ) 
+        ((null a) :no)
+        (T (setf (svref (srces self) 1) (cdr a)) (car a))
+)))
+
+
+(defclass divid (basic-productor) ())
+(defmethod clone ((self divid) l)
+ (make-instance 'divid :srces (vector l nil) :state 0)
+) 
+(defmethod next ((self divid))
+ (let* ((src (srces self)) (l (svref src 0)) (a (svref src 1)) (s (state self)))
+  (setf (state self) 1)
+  (cond ((zerop s)
+         (let* ((cl (cons nil (car l))))
+          (setf (svref src 1) (list cl (cdr cl) (cdr cl)) (state self) 1)
+          (next self)
+        ))
+        ((null (cdaddr a)) :no)
+        (T (setf (cdar a) (caddr a))
+         (pop (caddr a)) 
+         (setf (cddar a) nil)
+         (pop (car a))
+         (values (cadr a) (caddr a))
+)))     )         
+(defmethod reset ((self divid)) 
+ (let ((a (svref (srces self) 1)))
+  (cond ((= 1 (state self)) 
+         (setf (cdar a) (caddr a)  
+               (car a) (cadr a)  
+               (caddr a) (cadr a)  
+               (state self) 2
+         )
+         (push nil (car a)) t
+        )
+        (T nil)
+)))
+
+
+(defclass divide (basic-productor) ())
+(defmethod clone ((self divide) l)
+ (make-instance 'divide :srces (vector l nil) :state 0)
+) 
+(defmethod next ((self divide))
+ (let* ((src (srces self)) (a (car (getv0 src))) (b (svref src 1)) (s (state self)))
+  (setf (state self) 1)
+  (cond ((zerop s) (values-list (setf (svref src 1) `((,(car a)) ,(cdr a)))))
+        ((null (cdadr b)) :no)
+        (T (values-list (setf (svref src 1) `((,@(car b) ,(caadr b)) ,(cdadr b)))))
+))) 
+
+
+; Zum Testen:
+#|
+(setf j '
+(defprod catal (l) ()
+ (cond ((null (cdr l)) (source (car l))) ;  (source ((p 'member (list (car l)))) p)) ; 
+ 	 (T (source (
+          (d1 d2 'divid (copy-list l))
+          (c1 'catal d1)
+          (c2 'catal d2)
+         )
+         (list c1 c2)
+))     ))
+)
+
+(defprod p0 () () 
+  
+
+(defun tr () (eval j) (setpr u 'catal '(a c d e)) (next u))
+(defun u () (describe u)) (defun un () (next u))
+(defun ud () (dotimes (i 4) (print (un))))
+(defun t1 (r) (let ((n (flg i 12 i)) p) (setpr p 'catal n) (dotimes (j r) (print (next p)))))
+(defun t0 () (let ((n (flg i 9 i)) p) (setpr p 'catal n) (dotimes (j 500) (next p))))
+
+(tr)
+
+(setf g '
+(defprod g (a b) () 
+ (if a (source ((d 'member a)) 
+   (cond ((not (consp a)) (source 0))
+         ((not (consp b)) (source ((e 'member a)) (cons d e)))
+         (T (source ((f 'member a) (g 'g b nil)) (cons f g)))
+  ))
+  (if b (source ((e 'member b) (f 'g nil (cdr b))) (cons e f)) (source nil))
+))    
+)
+
+(eval g)
+
+(setf y (prod 'g '(d e 3) nil))
+(defun y () (describe y))
+(defun n () (next y))
+
+|#

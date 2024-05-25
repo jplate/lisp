@@ -1,0 +1,165 @@
+
+; Standardisieren nach dem Radix-Prinzip
+
+; Zu beachten:
+; - Die "ordn"-Methode darf keine hoeheren Werte liefern als die "tab"-Tabel-
+;   le Zeilen hat.
+; - Weder "stnd" noch "rsort" veraendern ihre Argumente.
+
+; allgemeine Funktionen und Makros
+
+(defmacro lfn (x init fn)
+ `(let ((r* ,init))
+   (dotimes (i* (length ,x) r*) 
+    (let ((e* (nth i* ,x))) (setq r* ,fn))
+) )) 
+
+(defun assoc+ (x y) (lfn y nil (if (equal (car e*) x) (return e*))))
+
+(defun carl (x) (if (consp (car x)) (mapcar (lambda (a) (car a)) x) (car x)))
+
+
+; spezielle Funktionen, Klassen und Objekte
+
+(defclass zuordnung () ((tab :reader tab :initarg :tab :initform nil)
+                        (tabl :reader tabl :initarg :tabl :initform 0)
+))
+(defmethod ordn ((self zuordnung) x) (eval `(case ,x ,(tab self))))
+(defmethod vrgl ((self zuordnung) x y)
+ (cond ((or (null (ordn self x)) (null (ordn self y))) nil)
+        ((= (cadr (ordn self x)) (cadr (ordn self y))) 0)
+        ((< (cadr (ordn self x)) (cadr (ordn self y))) 1)
+        (T -1)
+))
+
+(defclass zuordnung-al (zuordnung) ())
+(defmethod ordn ((self zuordnung-al) x)
+ (if (numberp x) (1- (tabl self))
+  (case x
+   (#\)  0) (#\{  1) (#\[  2) (#\   3) (#\A  4) (#\B  5) (#\C  6)
+   (#\D  7) (#\E  8) (#\F  9) (#\G 10) (#\H 11) (#\I 12) (#\J 13)
+   (#\K 14) (#\L 15) (#\M 16) (#\N 17) (#\O 18) (#\P 19) (#\Q 20)
+   (#\R 21) (#\S 22) (#\T 23) (#\U 24) (#\V 25) (#\W 26) (#\X 27)
+   (#\Y 28) (#\Z 29) (#\0 30) (#\1 31) (#\2 32) (#\3 33) (#\4 34)
+   (#\5 35) (#\6 36) (#\7 37) (#\8 38) (#\9 39) (#\! 40) (#\' 41)
+   (#\  42) (#\$ 43) (#\% 44) (#\  45) (#\? 46) (#\= 47) (#\< 48)
+   (#\> 49) (#\, 50) (#\; 51) (#\. 52) (#\: 53) (#\- 54) (#\_ 55)
+   (#\/ 56) (#\| 57) (#\+ 58) (#\* 59) (#\# 60) (#\@ 61) (#\  62)
+   (#\  63) (#\  64) (#\` 65) (#\^ 66) (#\  67) (#\~ 68) (#\] 69)
+   (#\} 70) (D.  71) (K.  72) (#\( 73) (:e 74)
+)))
+(setq z-al (make-instance 'zuordnung-al :tabl 75))
+
+; uebersetzt ein Symbol oder einen String x, ganz oder elementeweise, gemaess
+; einer Tabelle tab oder einem Zuordnungsobjekt zo.
+(defun transl (x tab &optional zo) 
+ (let ((xa (assoc+ x tab)) xt erg)
+  (if xa (setq xt (cadr xa)) (setq xt (ordn zo x)))
+  (cond (xt `(,xt))
+        (T (setq xt (if (symbolp x) (symbol-name x) x))
+         (mapcar
+          (lambda (a) (or (cadr (assoc+ a tab)) (ordn zo a) (ordn zo :e)))
+          (do ((i (1- (length xt)) (1- i))) ((< i 0) erg)
+           (push (elt xt i) erg)
+)))     )))
+
+; Sortieren einer Liste von Listen nach dem Radix-Prinzip: 
+; Elemente von o gelten als "Woerter", Elemente der Woerter als "Buchstaben";
+; x ist die Liste der zu sortierenden Items, o die Liste, an der sich der Sor-
+; tiervorgang orientieren soll, bz die Anzahl der "buckets".
+(defun rsort-a (x bz) 
+ (let* (xb xs xlgl posl nlrl tmp1 tmp2)
+  ; Anlegen einer Liste von Wortlisten, sortiert nach Wortlaenge:
+  (do ((xl x (cdr xl))) ((null xl))
+   (cond ((< (setq tmp1 (- (setq tmp2 (length (cdar xl))) (length xlgl))) 1)
+          (push (car xl) (nth (1- tmp2) xlgl)) 
+         )
+         (T (setq xlgl `(,@xlgl ,@(make-list (1- tmp1)) ,`(,(car xl))))) 
+  ))     
+  (setq tmp2 -1
+   ; Anlegen einer Liste, aus der sich ersehen laesst, welche Buchstaben an welcher Position innerhalb eines Wortes vorkommen (nlrl):
+   posl ; 1. Schritt  (Elem. v. posl: (Code des entspr. Zeichens, Nummer des Buckets, . Positionen des entspr. Zeichens innerhalb der Woerter) ) 
+   (dolist (e x posl)
+    (lfn (cdr e) nil
+     (cond ((setq tmp1 (assoc+ e* posl))
+            (setf (nth (cadr tmp1) posl) `(,e* ,(cadr tmp1) ,i* ,@(cddr tmp1)))
+            nil
+           )
+           (T (setq posl `(,@posl (,e* ,(incf tmp2) ,i*))) nil)
+   )))                
+   nlrl ; 2. Schritt
+   (dolist (e posl nlrl)
+    (lfn (cddr e) nil
+     (cond ((< (setq tmp1 (- e* (length nlrl))) 0)
+            (if (not (equal (car e) (car (nth e* nlrl))))
+             (push (car e) (nth e* nlrl))
+            ) nil
+           )
+           (T (setq nlrl `(,@nlrl ,@(make-list tmp1) ,`(,(car e)))) nil)
+  )))) 
+  ; (print `(,nlrl ,xlgl))
+  ; Sortierschleife:
+  (do ((i (1- (length nlrl)) (1- i))) ((< i 0) xs)
+
+   (setq xs `(,@(nth i xlgl) ,@xs)
+    xb (make-list bz) tmp1 (sort (nth i nlrl) '<)
+   )
+   (do ((xl xs (cdr xl))) ((null xl))
+    (push (car xl) (nth (nth (1+ i) (car xl)) xb))
+   )
+   (setq tmp2 nil xs
+    (do ((i (- (length tmp1) 1) (1- i))) ((minusp i) tmp2)
+     (setq tmp2 `(,@(nth (nth i tmp1) xb) ,@tmp2))
+)))))
+(defmethod rsort ((self zuordnung) x)
+ (if (not (consp x)) x
+  (mapcar (lambda (a) (car a))
+   (rsort-a (mapcar (lambda (a) `(,a ,@(transl a nil self))) x) (tabl self))
+)))
+
+; Standardisierung eines Ausdrucks:
+; Zo ist ein Zuordnungsobjekt, kom enthaelt (nach Moeglichkeit) alle verwen-
+; deten Operatoren, deren Argumente kommutativ sind; lzt, lat, kzt: siehe De-
+; finition von stnd. Unb enthaelt nicht zu beruecksichtigende Zeichen.
+(defun stnd-a (x zo kom unb lzt kat kzt)
+ (if (not (consp x)) `(,x ,@(transl x () zo))
+  (let (xn tmp)
+   (if (equal (car x) 'e.) (if (consp (caddr x))
+     (setq unb `(,@(mapcar (lambda (a) `(,a ,lzt)) (caddr x)) ,@unb))
+     (setq unb `((,(caddr x) ,lzt) ,@unb))
+   ))
+   (dolist (e (cdr x))
+    (if (not (consp e)) (setq xn `(,@xn (,e ,@(transl e unb zo))))
+     (setq tmp (stnd-a (if (eq (car e) 'N.)(cadr e) e) zo kom unb lzt kat kzt)
+           xn `(,@xn
+                (,(if (eq (car e) 'N.) `(N. ,(carl tmp)) (carl tmp))
+                 ,@(if (not (consp (car tmp))) `(,(cadr tmp))
+                    `(,kat ,@(cdar tmp)
+                      ,@(mapcan (lambda (a) `(,lzt ,@(cdr a))) (cdr tmp)) ,kzt
+   )))         ))  ) )
+   (cond ((member (car x) kom :test 'equal)
+          (setq tmp (rsort-a xn (tabl zo)))
+          `((,(car x) ,@(transl (car x) unb zo)) ,@tmp)
+         )                                   
+         (T `((,(car x) ,@(transl (car x) unb zo)) ,@xn))
+))))
+(defmethod stnd ((self zuordnung) x &optional kom unb)
+ (carl (stnd-a x self kom unb (car (transl #\  () self))
+   (car (transl #\( () self)) (car (transl #\) () self))
+)))
+      
+
+; Beispiele:
+(setq p4 '(k. (d. q j (n. r) (k. r e) p (< 5 (e. a (g a)))) (= (+ 104 (* 2 r) (e. z (k. (n. (h z)) (g z))) m) (e. (m. y x) (f x y)))))
+(setq p5 '(nun der tag mich mued gemacht / soll mein sehnliches verlangen / freundlich die gestirnte nacht / wie ein muedes kind empfangen //
+           haende lasst von allem tun / stirn vergiss du alles denken / alle meine sinne nun / wollen sich in tiefen schlummer senken //
+           und die seele unbewacht / will in freien fluegen schweben / um im zauberkreis der nacht / tief und tausendfach zu leben 
+)         )
+(setq p6 '("Nun" "der" "Tag" "mich" "mued" "gemacht" "/" "Soll" "mein" "sehnliches" "verlangen" "/" "Freundlich" "die" "gestirnte" "Nacht" "/" "Wie" "ein" "muedes" "Kind" "empfangen" "//"
+           "Haende" "lasst" "von" "allem" "Tun" "/" "Stirn" "vergiss" "du" "alles" "Denken" "/" "Alle" "meine" "Sinne" "nun" "/" "wollen" "sich" "in" "tiefen" "Schlummer" "senken" "//"
+           "Und" "die" "Seele" "unbewacht" "/" "Will" "in" "freien" "Fluegen" "schweben" "/" "Um" "im" "Zauberkreis" "der" "Nacht" "/" "tief" "und" "tausendfach" "zu" "leben" 
+)         )
+(setq p7 '("NUN" "DER" "TAG" "MICH" "MUED" "GEMACHT" "/" "SOLL" "MEIN" "SEHNLICHES" "VERLANGEN" "/" "FREUNDLICH" "DIE" "GESTIRNTE" "NACHT" "/" "WIE" "EIN" "MUEDES" "KIND" "EMPFANGEN" "//"
+           "HAENDE" "LASST" "VON" "ALLEM" "TUN" "/" "STIRN" "VERGISS" "DU" "ALLES" "DENKEN" "/" "ALLE" "MEINE" "SINNE" "NUN" "/" "WOLLEN" "SICH" "IN" "TIEFEN" "SCHLUMMER" "SENKEN" "//"
+           "UND" "DIE" "SEELE" "UNBEWACHT" "/" "WILL" "IN" "FREIEN" "FLUEGEN" "SCHWEBEN" "/" "UM" "IM" "ZAUBERKREIS" "DER" "NACHT" "/" "FREI" "UND" "UNBESCHWERT" "ZU" "LEBEN"
+)         )

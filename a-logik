@@ -1,0 +1,571 @@
+
+; Repraesentation aussagenlogischer Ausdruecke
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Erster Ansatz (Osnabrück, ca. 2000, mit leichten Veränderungen)
+
+; Zu beachten:
+; - Aufruf: (ve-al <Repräsentation der Aussage>)
+; - Wenn an reprs eine im Sinne von djgrp unzusammenhaengende Konjunktion
+;   uebergeben wird, kann die Funktion redundante Information nicht als sol-
+;   che erkennen. Man sollte daher nur Disjunktionen uebergeben.
+; - Wahrheitsfunktionen:
+;	 N.  = Negation
+;	 K.  = Konjunktion
+;	 D.  = Disjunktion
+;	 I.  = Implikation
+;	 AE. = Äquivalenz
+
+
+; allgemeine Funktionen, bzw. Makros
+
+(defun lassoc (x y) ; prueft, ob y ein Element enhaelt, das mit x beginnt. Wenn ein solches gefunden wird, wird dieses zurueckgegeben. 
+   ; Funktioniert auch dann, wenn ein Element von y keine Liste ist.
+	(cond ((null y) nil)
+		((and (consp (car y)) (eq (caar y) x)) (car y))
+		(T (lassoc x (cdr y)))))
+
+(defun in%? (x y) ; prueft, ob x als Menge in y enthalten ist.
+ (cond ((null x) t)
+       ((null y) nil)
+       ((and (not (listp x)) (not (listp y))) (equal x y))
+       ((not (listp x)) (member x y :test 'equal))
+       ((not (listp y)) (equal (car x) y))
+       (T (lfn x t (if (not (member e* y :test 'equal)) (return nil) t)))
+))
+
+(defun red% (x &optional (n nil) (re nil)) ; laesst alle Elemente von x nur
+; einmal in x vorkommen und entfernt optional alle nils.
+ (cond ((null x) re)
+       ((atom x) x)
+       ((or (and n (null (car x))) 
+            (member (car x) re :test 'equal)
+        ) (red% (cdr x) n re))
+       (T (red% (cdr x) n `(,@re ,(car x))))
+))
+
+(defun dif% (x y &optional r) ; liefert die Differenzmenge von x und y.
+ (cond ((equal x y) nil)
+       ((and (listp x) (listp y))
+        (append (lfn x nil (if (and (not (member e* y :test 'equal))
+                                    (not (member e* r* :test 'equal))
+                               ) `(,@r* ,e*) r*
+                )          ) (if (not r) (dif% y x t))
+       ))
+       (T nil)
+))
+
+(defmacro lfn (x init fn)
+ `(let ((r* ,init))
+   (dotimes (i* (length ,x) r*) 
+    (let ((e* (nth i* ,x))) (setf r* ,fn))
+) )) 
+
+
+; spezielle Funktionen
+
+; erste Stufe der Vereinfachung eines a. l. Ausdrucks:
+
+(defun elimp (x) ; loest die Implikationen eines a.l. Ausdrucks auf.
+	(cond ((not (consp x)) x)
+		((eq (car x) 'I.) `(D. (N. ,(elimp (cadr x))) ,(elimp (caddr x))))
+		((eq (car x) 'AE.) (let ((y (mapcar #'elimp (cdr x))))
+			`(D. (K. .,(mapcar (lambda (a) `(N. ,(elimp a))) y)) (K. .,y))))
+		(T (cons (car x) (mapcar #'elimp (cdr x))))
+))
+
+(defun notconordis (x) (not (and (consp x) (or (eq (car x) 'K.) (eq (car x) 'D.)))))
+
+(defun flclg (x) ; entfernt kursorisch ueberfluessige Verschachtelungen (AL).
+ ;(format T "~A" x)
+ (cond ((notconordis x) x)
+       ((lassoc (car x) (cdr x))
+        (cons (car x)
+         (mapcan (lambda (e)
+                  (if (and (consp e) (equal (car e) (car x)))
+                      (cdr e) (list e)
+                 )) (cdr x)
+       ))) (T x)
+))
+
+(defun ng? (x) (and (consp x) (eq (car x) 'N.)))
+
+(defun ng%? (x y) ; prueft, ob x explizit irgendein Element von y negiert.
+ (and (ng? x) (member (cadr x) y :test 'equal))
+)
+
+(defun fiwit (x) ; deckt bestimmte wahre u. falsche Aussagen auf: 
+  ; Disjunktion mit t oder zwei explizit kontradiktorischen Elementen: t
+  ; Konjunktion mit nil oder zwei explizit kontradiktorischen Elementen: nil
+ (cond ((notconordis x) x)
+       ((and (eq (car x) 'D.) (member t x)) t)
+       ((and (eq (car x) 'K.) (member nil x)) nil)
+       ((and (lassoc 'N. (cdr x))
+             (lfn (cdr x) nil (if (ng%? e* (cdr x)) (return t)))
+        ) (eq (car x) 'D.)
+       ) (T x)
+))
+
+(defun veinf1 (x) ; zieht Negationszeichen nach innen u. wendet auf das Ergebnis fiwit u. flclg an.
+ (if (not (consp x)) x
+   (if (ng? x)
+    (cond ((null (cadr x)) t)
+          ((eq (cadr x) t) nil)
+          ((atom (cadr x)) x)
+          ((ng? (cadr x)) (veinf1 (cadadr x))) 
+		  (T (fiwit (flclg `(,(if (eq (caadr x) 'K.) 'D. 'K.) .,(mapcar (lambda (e) (veinf1 `(N. ,e))) (cdadr x))))))) 
+    (fiwit (flclg `(,(car x) .,(mapcar #'veinf1 (cdr x)))))
+)))
+
+
+; zweite Stufe der Vereinfachung eines a. l. Ausdrucks:
+
+(defun reduz (x)
+ (if (or (notconordis x) (> (length x) 2)) x
+  (if (null (cdr x)) (eq (car x) 'K.) (cadr x))
+))
+
+; entfernt kursorisch ueberfluessige Terme (AL):
+(defun elubt (x &optional n nalv alv aln re)
+	(cond ((null x) re)
+		((atom x) x)
+		((member (car x) alv :test 'equal) n)
+		((or (and n (null (car x)))
+				(and (not n) (eq (car x) t))
+				(member (car x) re :test 'equal)
+				(member (car x) nalv :test 'equal)
+				(and (not (notconordis (car x)))
+					(lfn `(,@nalv ,@aln ,@re .,(cdr x)) nil
+						(if (and e* (or (member e* (car x) :test 'equal) ; noetig, falls (ng? e*) 
+										(in%? e* (car x))))                   ; sonst
+							(return t)))))
+			(elubt (cdr x) n nalv alv aln re))
+		(T (elubt (cdr x) n nalv alv aln `(,@re ,(car x))))))
+                                                            
+(defun atl-a (x &optional s p) ; s fuer "signumerhaltend", p fuer "penetrierend"
+	(if s (if (or (not (consp x)) (ng? x)) `(,x)
+			(if p (mapcan (lambda (a) (atl-a a t t)) (cdr x))
+				(mapcan (lambda (a) (if (and a (not (eq a t)) (notconordis a)) `(,a))) (cdr x))))
+		(if (not (consp x)) `(,x)
+			(if p (mapcan (lambda (a) (atl-a a nil t)) (cdr x))
+				(mapcan (lambda (a) (if (consp a) (if (ng? a) `(,(cadr a))) `(,a)))
+					(cdr x))))))
+
+(defun atl (x &optional s p)
+	(if (consp x) (mapcar (lambda (a) (atl-a a s p)) (cdr x)) `((,x))))
+
+(defun neg (x)
+	(if (ng? x) (cadr x)
+		(cond ((null x) t)
+			((eq x t) nil)
+			((consp x)
+				(cond ((member (car x) '(<> ><)) `(= .,(cdr x)))
+					((member (car x) '(=> >=)) `(< .,(cdr x)))
+					((member (car x) '(<= =<)) `(> .,(cdr x)))
+					(T `(N. ,x))))
+			(T `(N. ,x)))))
+
+(defun neg% (x) (lfn x nil `(,@r* ,(neg e*))))
+
+(defun veinf2-a (x &optional nalv alv al-s aln)
+	(let ((nalv+ `(,@nalv .,aln)) (alv+ `(,@alv .,(neg% aln))))
+		(prog1
+			(reduz (elubt 
+					(fiwit (flclg
+						(lfn x nil `(,@r* ,(veinf2 e*
+								(if al-s (setq alv+ `(,@alv+ .,(neg% (copy-list (car al-s))))) alv+)
+								(if al-s (setq nalv+ `(,@nalv+ .,(copy-list (car al-s)))) nalv+)
+								al-s)))))
+					(eq (car x) 'D.) nalv alv aln))
+			(setf (car al-s) nil))))
+
+(defun veinf2 (x &optional nalv alv (al-s '(nil)) (al1 (atl-a x t)) (aln al1)) 
+	(cond ((notconordis x) x)
+		((lfn alv nil (if (member e* x :test 'equal) (return t)))
+			(eq (car x) 'D.))
+		(T (let* ((xn (veinf2-a x nalv alv '(nil) aln)) 
+					(al2 (atl-a xn t)) ald)
+				(cond ((and (consp xn) (eq (car xn) (car x)) 
+							(setq ald (dif% al2 al1 t)))
+						(veinf2 xn nalv alv '(nil) `(,@al1 ,@aln) ald))
+					((notconordis xn) (setf (car al-s) `(,xn .,(car al-s))) xn)
+					((and (consp xn) (not (eq (car xn) (car x))))
+						(setf (car al-s) `(,@(cdr xn) .,(car al-s))) 
+						xn)
+					(T xn))))))
+
+
+; dritte Stufe der Vereinfachung eines a. l. Ausdrucks:
+
+; reduziertes elubt:
+(defun elutr (x &optional n re)
+	(cond ((null x) re)
+		((atom x) x)
+		((or (and (not n) (eq (car x) t))
+				(and n (null (car x)))
+				(member (car x) re :test 'equal))
+			(elutr (cdr x) n re))
+		(T (elutr (cdr x) n `(,.re ,(car x))))))
+ 
+(defun kombn-a (x)
+ (cond ((not (consp x)) (list x))
+       (T (mapcan (lambda (a)
+          (mapcan (lambda (b &aux (la (if (notconordis a) (list a) (cdr a))))
+            (cond ((some (lambda (c) (member (neg c) b :test #'equal)) la) nil) ; avoid tautologies and contradictions
+                  (T (list (union la b :test #'equal)))))
+           (kombn-a (cdr x))))
+          (if (notconordis (car x)) (list (car x)) (cdar x))))))		
+		  
+(defun kombn (x) ; x has at most three levels of conjunctions and disjunctions.
+ (cond ((or (notconordis x) (not (or (lassoc 'D. x) (lassoc 'K. x)))) x)
+       (T `(,(if (eq (car x) 'K.) 'D. 'K.)
+           .,(mapcar (lambda (a) `(,(car x) .,a)) (kombn-a (cdr x)))))))     
+
+(defun veinf3-a (x &optional r)
+	(cond ((not (consp x)) x)
+		((or r (eq (car x) 'K.))
+			(let (r0a r1a r2a r3a)
+				(setf r0a (kombn x)) 
+				;(format t "~%R0a=~s" r0a)
+				(setf r1a (mapcar (lambda (a) (reduz (elutr (fiwit a)))) r0a))
+				;(format t "~%R1a=~s" r1a)
+				(setf r2a (elubt (fiwit r1a) (eq (car x) 'K.)))
+				;(format t "~%R2a=~s" r2a)
+				(setf r3a (reduz r2a))
+				r3a))
+		((eq (car x) 'D.) (reduz (elubt (fiwit (flclg x)) t)))
+		(T x)))
+
+(defun veinf3 (x) 
+ ;(format T "~%X=~s" x)
+	(if (notconordis x) x
+		(let ((r0 
+				(lfn (cdr x) `(,(car x))
+					(let ((ev (veinf3 e*)))
+						(if (and (consp ev) (eq (car x) (car ev))) `(,@r* .,(cdr ev)) `(,@r* ,ev)))))) 
+			;(format t "~%R0=~s" r0)
+			(veinf3-a r0))))    
+
+
+(defun ve-al (x &optional atl f) ; atl: Liste von atomaren Aussagen, die als gegeben vorausgesetzt werden.
+ (let ((xn (if f x (veinf1 (elimp x)))))
+  ;(format t "~%XN=~s" xn)
+  (cond ((atom xn) xn)
+        ((eq (car xn) 'K.) (veinf3 (veinf2 xn atl)))
+        (T (veinf3 (veinf1 (neg (veinf3 (veinf2 (veinf1 (neg xn)) atl))))))
+)))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Alternativer Ansatz (Lugano, April 2020)
+
+(defconstant *negation* 'N.)
+(defconstant *disjunction* 'D.)
+(defconstant *conjunction* 'K.)
+(defconstant *implication* 'I.)
+(defconstant *equivalence* 'AE.)
+
+
+(defun literalp (x) (or (atom x) (and (consp x) (eq (car x) *negation*) (atom (cadr x)))))
+	
+(defun negp (x)  ; checks if x is a negated formula. (Near copy of ng?.)
+	(and (consp x) (eq (car x) *negation*)))
+
+(defun negation (x)
+	(cond ((negp x) (cadr x))
+		((null x) T)
+		((eq x T) nil)
+		(T `(,*negation* ,x))))
+
+(defun elimps (x) ; transforms implications and equivalences. (Near copy of elimp.)
+	(cond ((literalp x) x)
+		((eq (car x) *implication*) `(,*disjunction* ,(negation (elimps (cadr x))) ,(elimps (caddr x))))
+		((eq (car x) *equivalence*) 
+			(let ((done (mapcar #'elimps (cdr x))))
+				`(,*disjunction* 
+					(,*conjunction* .,(mapcar (lambda (a) (negation (elimps a))) done)) 
+					(,*conjunction* .,done))))
+		(T `(,(car x) .,(mapcar #'elimps (cdr x))))))
+
+(defun conordis (x)  ; checks if x is a conjunction or disjunction
+	(and (consp x) 
+		(or (eq (car x) *conjunction*) 
+			(eq (car x) *disjunction*))))
+
+
+;; The following two definitions aren't used, for reasons of efficiency.
+
+(defun elnest-a (x op accum) ; operates on the 'tail' of a conjunction or disjunction. Returns T if it finds that the overall term collapses into T or nil (depending on whether it is a conjunction or disjunction).
+	(if (null x) 
+		accum
+		(let* ((a (car x))
+				(alist 	; either nil, or (cdr a), or (list a)
+					(cond ((and (conordis a) (eq (car a) op)) (cdr a)) 	; superfluous nesting of a in the embedding conjunction or disjunction
+						((or (and (null a) (eq op *disjunction*))
+								(and (eq a t) (eq op *conjunction*))) nil)		; a itself is superfluous
+						(T (list a)))))
+			(if (or (and (null a) (eq op *conjunction*)) 		; occurrence of nil in a conjunction
+					(and (eq a T) (eq op *disjunction*)) 		; occurrence of T in a disjunction
+					(lfn alist nil (if (member (negation e*) accum :test #'equal) (return t))))			; contradictory pair of literals
+				T	
+				(elnest-a (cdr x) op `(
+						,.accum
+						,.(mapcan (lambda (b)
+								(let ((in (lambda (c) 
+												(or (and (conordis b) (member c (cdr b) :test #'equal)) 
+													(and (conordis b) (conordis c) (eq (car b) (car c)) (subsetp (cdr c) (cdr b) :test #'equal)))))) 
+									(if (or (and (literalp b) (member b accum :test #'equal)) 	; eliminate duplicate literals
+											(lfn accum nil (if (or (and (conordis b) (member e* (cdr b) :test #'equal)) 
+													(and (conordis b) (conordis e*) (eq (car b) (car e*)) (subsetp (cdr e*) (cdr b) :test #'equal))) (return t))) 
+											(lfn (cdr x) nil (if (or (and (conordis b) (member e* (cdr b) :test #'equal)) 
+													(and (conordis b) (conordis e*) (eq (car b) (car e*)) (subsetp (cdr e*) (cdr b) :test #'equal))) (return t))))
+										nil
+										(list b))))
+							alist)))))))
+
+(defun elnest1 (x) ; simplifies a conjunction or disjunction, mainly by eliminating superfluous conjunction-conjunction or disjunction-disjunction nesting, but only at the top two levels. (Improved version of flclg.)
+	; Also removes superfluous terms (akin to elubt).
+	(if (literalp x) 
+		x
+		(let ((done (elnest-a (cdr x) (car x) nil)))
+			(cond ((null done) (eq (car x) *conjunction*))
+				((eq done T) (eq (car x) *disjunction*))
+				((null (cdr done)) (car done))
+				(T `(,(car x) .,done))))))
+
+
+;; The following five definitions are taken almost verbatim from the earlier solution, and are used in the definition of elnest below, which seems to be more efficient than elnest1.
+
+(defun eline (x) ; deletes superfluous nesting (near-copy of flclg).
+ ;(format T "~A" x)
+	(cond ((literalp x) x)
+		((lassoc (car x) (cdr x))
+			(cons (car x)
+				(mapcan (lambda (e)
+						(if (and (consp e) (equal (car e) (car x)))
+							(cdr e) 
+							(list e)))
+					(cdr x))))
+		(T x)))
+
+(defun negelp (x y) ; checks if x explicitly negates any element of y (near copy of ng%?).
+	(and (negp x) (member (cadr x) y)))
+
+(defun cursim (x) ; cursory simplification (near copy of fiwit).
+	(cond ((literalp x) x)
+		((and (eq (car x) *disjunction*) (member t x)) t)
+		((and (eq (car x) *conjunction*) (member nil x)) nil)
+		((lfn (cdr x) nil (if (negelp e* (cdr x)) (return t)))
+			(eq (car x) *disjunction*))
+		(T x)))
+
+(defun reduc (x) ; near copy of reduz
+	(if (or (literalp x) (> (length x) 2)) 
+		x
+		(if (null (cdr x)) (eq (car x) *conjunction*) (cadr x))))
+
+(defun delsup (x &optional op re) ; cursorily deletes superfluous terms. (Identical to elutr.)
+	(cond ((null x) re)
+		((atom x) x)
+		((or (and (not op) (eq (car x) T))
+				(and op (null (car x)))
+				(member (car x) re :test 'equal))
+			(delsup (cdr x) op re))
+		(T (delsup (cdr x) op `(,.re ,(car x))))))
+
+(defun elnest (x)
+	(if (literalp x) 
+		x
+		(reduc (delsup (cursim (eline x)) (eq (car x) *disjunction*)))))
+
+(defun pullnegs(x) ; recursively pulls negation-signs inwards, applying elnest on each level, so that in the output no conjunction is nested in a conjunction and no disjunction in a disjunction. (Near copy of veinf1.)
+	(if (not (consp x)) x
+		(if (negp x)
+			(cond ((null (cadr x)) t)
+				((eq (cadr x) t) nil)
+				((atom (cadr x)) x)
+				((negp (cadr x)) (pullnegs (cadadr x)))  ; eliminate double negation
+				(T (elnest 
+							`(,(if (eq (caadr x) *conjunction*) *disjunction* *conjunction*) 
+								.,(mapcar (lambda (e) (pullnegs (negation e))) (cdadr x))))))
+			(elnest `(,(car x) .,(mapcar #'pullnegs (cdr x)))))))
+
+(defun deeper (x n)
+	(or (< n 0)
+		(and (not (literalp x))	
+			(lfn x nil (if (deeper e* (1- n)) (return t))))))
+		
+(defun prune (x &optional accum) ; operates on a list of lists of literals, which are assumed to be the 'tails' of conjunctions or disjunctions.
+	(if (null x) 
+		accum
+		(prune (cdr x) 
+			(if (or 
+					(lfn accum nil (if (subsetp e* (car x) :test #'equal) (return t))) 	
+					(lfn (cdr x) nil (if (subsetp e* (car x) :test #'equal) (return t))))
+				accum
+				`(,(car x) .,accum)))))
+						
+(defun flip-a (x) ; operates on the 'tail' of a conjunction or disjunction
+	;(format t "~%X: ~s" x)
+	(cond ((null x) (list nil))
+		(T (let ((flipped-rest (flip-a (cdr x))))
+				(prune
+					(mapcan (lambda (a)
+							(let* ((la (if (conordis a) (cdr a) (list a)))
+										(nla (mapcar #'negation la)))
+								(mapcan (lambda (b) 
+										(if (lfn nla nil (if (member e* b :test #'equal) (return t))) 
+											nil 		; don't construct any tautologies or contradictions.
+											(list (union la b :test #'equal))))
+									flipped-rest)))
+						(if (conordis (car x)) (cdar x) (list (car x)))))))))
+
+(defun flip (x) ; flips conjunction and disjunction. (Improved version of kombn.)
+	; Does *not* assume that the members of x are either literals or conjunctions/disjunctions of literals. Rather, the members of the members of x can themselves be conjunctions or disjunctions.
+	; The output of this function may contain literals. 
+	(if (deeper x 1) 
+		(elnest `(,(if (eq (car x) *conjunction*) *disjunction* *conjunction*)
+				.,(mapcar (lambda (a)
+						(if (null (cdr a)) (car a) `(,(car x) .,a))) 
+					(flip-a (cdr x)))))
+		x))
+		   
+(defun normal-a (x op) ; recursively 'flips' either conjunctions or disjunctions (depending on op) and applies elnest at each level.
+	; Assumes that in x no conjunction is nested in a conjunction and no disjuncion in a disjunction.
+	(if (conordis x)
+		(if (eq (car x) op) 
+			(flip (normal-b x op))
+			(normal-b x op))
+		x))
+
+(defun normal-b (x &optional (op *disjunction*))
+	(if (deeper x 2) 
+		(elnest `(,(car x) .,(mapcar (lambda (a) (normal-a a op)) (cdr x))))
+		x))
+
+(defun normal (x &optional (op *disjunction*) &aux (x1 (pullnegs (elimps x))))
+	; In x1,  no conjunction is nested in a conjunction and no disjunction in a disjunction.
+	;(format t "~%X1:~s" x1)
+	(if (deeper x1 1) 
+		(let ((x2 (normal-b x1 op)) x3)
+			;(format t "~%X2:~s" x2)
+			(setf x3 (flip x2))
+			;(format t "~%X3:~s" x3)
+			(if (and (consp x3) (eq op (car x3))) 
+				x3 
+				(flip x3)))
+		x1))
+					
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; Standardisierung a. l. Ausdruecke:
+; Wie es scheint, ist alphanumerische Standardisierung a. l. Ausdruecke nur
+; dann von Vorteil, wenn der Anteil von bereits gespeicherten Informationen
+; an den noch vorzunehmenden Eingaben ueber 40% liegt.
+
+;(load "stndrd" :verbose nil)
+
+; Hauptfunktion:
+(defun st-al (x) (stnd z-al x '(k. d. m. + * =)))
+
+
+; Repraesentation a. l. Ausdruecke:
+
+(defun djgrp (x i &optional (m (atl x nil t)) (z (nth i m)) (j 0) (n m) re)
+ (if (and i (null re))
+  (progn (setf (nth i m) nil) (setq re (list (nth (1+ i) x))))
+ )
+ (cond ((null n) re)
+       ((and (car n)
+         (lfn (car n) nil (if (member e* z :test 'equal) (return t)))
+        )                                     
+        (setq z `(,@(copy-list (car n)) ,@z))
+        (setf (nth j m) nil)
+        (djgrp x i m z 0 m `(,@re ,(nth (1+ j) x)))
+       )
+       (T (djgrp x i m z (1+ j) (cdr n) re))
+))
+
+(defun reprs (x &optional (aus? t) r?)
+   (let* ((xv (ve-al x (atl-a *ri* t)))
+          (kxv? (and (consp xv) (eq (car xv) 'K.))) m g gv kgv?
+         )
+    (cond ((null xv) (format aus? " Die Eingabe widerspricht sich selbst oder bereits gespeicherten Informationen~% und wird daher abgelehnt.") nil)
+          ((eq xv t) (format aus? " Die Eingabe ist tautologisch oder stellt keine neue Information dar.") t)
+          (T
+           (setq m (copy-list *atl*)
+                 g (djgrp *ri* nil m (red% (atl-a xv nil t)))
+           )
+           (if (null g)
+            (progn (setq
+              *ri* `(K. ,@(cdr *ri*) ,@(if kxv? (cdr xv) (list xv)))
+              *atl* `(,@*atl*
+                      ,@(if kxv? (atl xv nil t) `(,(red% (atl-a xv nil t))))
+             )       ) (if r? (push `(,xv t ,xv) *gsc*))
+             (format aus? " Eingabe gespeichert; neue Repraesentation:") xv
+            )
+            (progn (setq
+              gv (if (member xv g :test 'equal) (reduz `(K. ,@g)) 
+                  (veinf3-a `(K. ,@g ,@(if kxv? (cdr xv) `(,xv))))
+                 )
+              kgv? (and (consp gv) (eq (car gv) 'K.))
+             )
+             (cond ((null gv) (format aus? " Die Eingabe widerspricht bereits repraesentierten Informationen und wird daher~% abgelehnt.") nil)
+                   ((equal gv (reduz `(K. ,@g))) (format aus? " Die Eingabe stellt keine neue Information dar.") t)
+                   (T (setq
+                     *ri* `(K.
+                      ,@(mapcan (lambda (a b) (if a `(,b))) m (cdr *ri*))
+                      .,(if kgv? (cdr gv) (list gv))
+                     )
+                     *atl* `(
+                      ,@(mapcan (lambda (a b) (if a `(,b))) m *atl*)
+                      .,(if kgv? (atl gv nil t) `(,(red% (atl-a gv nil t))))
+                    )) (if r? (push `(,xv ,g ,gv) *gsc*))
+                    (format aus? " Eingabe gespeichert; neue Repraesentation:")
+                    gv
+)))       ))))     )      
+
+
+; Dateioperationen
+
+(defun ldri (&optional (fn "stdrd-ri.dat"))
+ (let ((fh (or (open fn :direction :probe)
+            (open fn :if-does-not-exist :create)
+      ))   )
+  (close fh) 
+  (setq *ri* '(K.) *atl* nil *gsc* nil)
+  (load fn :verbose nil) 
+  T
+))
+
+(defun spri (&optional (fn "stdrd-ri.dat"))
+ (let ((fh (open fn :direction :output)))
+  (print `(setq *ri* ',*ri*) fh)
+  (print `(setq *atl* ',*atl*) fh)
+  (print `(setq *gsc* ',*gsc*) fh)
+  (close fh)
+))
+
+(ldri)
+
+
+; Beispielaussagen:
+
+(setq q1 '(d. (k. p q) (k. p (n. r)) (k. (n. p) r) (k. (n. p) s) (k. (n. q) r) (k. (n. r) (n. s)))) 
+; soll zu T werden.
+(setq q2 '(i. (ae. (d. (k. (d. p q) (d. p (n. q))) (k. (n. p) q)) q) (d. (k. p r) (k. p (n. r)))))
+(setq q3 '(n. (k. (i. (i. p (k. (n. s) q)) (n. (i. (k. s q) p))) (n. (k. (n. (k. r p)) (n. (i. p (n. s))))))))
+(setq q4 '(d. (k. p s (n. r)) (k. p (n. s) q) (k. (n. p) s (n. q)) (k. (n. p) (n. s))))
+(setq q5 '(D. (K. (N. S) Q) (K. (N. R) S P) (K. (N. P) (N. S)) (K. S (N. R) (N. Q)) (K. (N. Q) (N. P)) (K. P (N. R) Q)))
+(setq r1 '(k. (ae. i j) (n. (k. p g)) (d. s f) (i. i (k. g (n. s))) (i. s p) (i. f i) (i. (n. (d. s p)) (n. j))))
+(setq r2 '(K. (D. (K. (N. I) (N. J)) (K. I J)) (D. (N. P) (N. G)) (D. S F) (D. (N. I) (K. G (N. S))) (D. (N. S) P) (D. (N. F) I) (D. S P (N. J))))
+(setq r3 `(d. (k. i .,(cdr r2)) (k. (n. i) .,(cdr r2))))
+(setf r4 '(i. (ae. (k. px py) (k. qx qy)) (k. (ae. px py) (ae. qx qy)))) 
+(setf r5 '(AE. (K. (I. (K. p q r) s) (I. (N. (K. p q r)) (AE. s (K. q m)))) n))
+(setf r5a '(K. (I. (K. p q r) s) (I. (N. (K. p q r)) (AE. s (K. q m)))))
+(setf r6 '(AE. (K. (I. (K. F LS U) TS) (I. (N. (K. F LS U)) (AE. TS (K. LS DD)))) (AE. TS (D. (K. F LS U) (K. LS DD)))))
+; soll zu T werden.
+(setf r7 '(AE. (K. (I. (K. F LS U) TS) (I. TS LS) (I. (N. (K. F U)) (AE. TS (K. LS DD)))) (AE. TS (D. (K. F LS U) (K. LS DD)))))
+; soll zu T werden.
